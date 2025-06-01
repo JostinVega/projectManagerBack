@@ -29,6 +29,12 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 
+// Ruta de prueba para GET /
+app.get('/', (req, res) => {
+  res.send('✅ Backend activo y escuchando 👂');
+});
+
+// Levantar el servidor
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
