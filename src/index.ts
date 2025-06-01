@@ -19,8 +19,8 @@ app.use(cors());
 app.use(express.json());
 
 mongoose.connect(process.env.MONGO_URI || '')
-  .then(() => console.log('MongoDB conectado'))
-  .catch(err => console.error('Error MongoDB:', err));
+  .then(() => console.log('✅ Conectado a MongoDB Atlas'))
+  .catch(err => console.error('❌ Error al conectar a MongoDB:', err));
 
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
