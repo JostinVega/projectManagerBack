@@ -6,7 +6,8 @@ import {
   QueryCommand, 
   UpdateCommand, 
   DeleteCommand, 
-  ScanCommand 
+  ScanCommand,
+  BatchGetCommand // <--- AÑADE ESTE
 } from '@aws-sdk/lib-dynamodb';
 import { ddbDocClient } from '../config/dynamodb'; // Nuestro cliente de AWS
 import { User } from '../models/user.interface';   // Nuestra interfaz de usuario
@@ -163,7 +164,7 @@ export const updateUser = async (userId: string, updateData: Partial<Omit<User, 
     ExpressionAttributeNames,
     ExpressionAttributeValues,
     ReturnValues: 'ALL_NEW', // Nos devuelve el item completo después de actualizar
-  };
+  } as const;
 
   try {
     const { Attributes } = await ddbDocClient.send(new UpdateCommand(params));
@@ -189,5 +190,39 @@ export const deleteUserById = async (userId: string): Promise<void> => {
   } catch (error) {
     console.error('Error al eliminar usuario:', error);
     throw new Error('Error al eliminar usuario');
+  }
+};
+
+
+/**
+ * Busca múltiples usuarios por sus IDs de forma eficiente.
+ * @param userIds - Un array de IDs de usuario a buscar.
+ * @returns Un array de objetos de usuario encontrados.
+ */
+export const getUsersByIds = async (userIds: string[]): Promise<User[]> => {
+  if (!userIds || userIds.length === 0) {
+    return [];
+  }
+
+  // Usamos new Set() para asegurar que no haya IDs duplicados en la petición
+  const uniqueUserIds = [...new Set(userIds)];
+
+  // BatchGetCommand puede buscar hasta 100 items a la vez
+  const params = {
+    RequestItems: {
+      // Recuerda que USERS_TABLE debe ser 'Users', la constante que definimos arriba
+      ['Users']: { 
+        Keys: uniqueUserIds.map(userId => ({ userId })),
+      },
+    },
+  };
+
+  try {
+    const { Responses } = await ddbDocClient.send(new BatchGetCommand(params));
+    // El nombre de la tabla debe coincidir aquí también
+    return (Responses?.['Users'] as User[]) || [];
+  } catch (error) {
+    console.error('Error al buscar usuarios por IDs:', error);
+    throw new Error('Error al obtener usuarios');
   }
 };

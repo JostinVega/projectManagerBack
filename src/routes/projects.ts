@@ -1,201 +1,128 @@
-import { Router, Request, Response } from 'express';
-import Project from '../models/Project';
-import User from '../models/User';
+// routes/projects.ts (VERSIÓN FINALÍSIMA CON TRANSFORMACIÓN COMPLETA)
+
+import { Router, Response } from 'express';
+import * as ProjectRepository from '../repositories/project.repository';
+import * as UserRepository from '../repositories/user.repository';
 import { authenticateJWT, AuthRequest } from '../middleware/auth';
+import { Project } from '../models/project.interface';
+import { User } from '../models/user.interface';
 
 const router = Router();
 
-// Obtener todos los proyectos (solo proyectos donde el usuario es miembro)
+// --- Función de Ayuda para transformar los datos ---
+// --- VERSIÓN CORREGIDA: AHORA INCLUYE TODOS LOS CAMPOS ---
+const toPublicProject = (project: Project, members: Partial<User>[] = []) => {
+  const projectMembers = members.length > 0 ? members : project.members;
+  return {
+    _id: project.projectId,
+    id: project.projectId,
+    name: project.name,
+    description: project.description,
+    createdBy: project.createdBy,
+    members: projectMembers,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    // --- CAMPOS AÑADIDOS A LA TRANSFORMACIÓN ---
+    status: project.status,
+    priority: project.priority,
+    dueDate: project.dueDate,
+  };
+};
+
+
+// Obtener todos los proyectos donde el usuario es miembro
 router.get('/', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user?.userId;
-    if (!userId) return res.status(401).json({ message: 'No autorizado' });
+    const userId = req.user!.userId;
+    const projectLinks = await ProjectRepository.getProjectsByUserId(userId);
+    const projectIds = projectLinks.map(p => p.projectId);
 
-    // Obtener proyectos donde el usuario es miembro, poblando miembros sin passwords
-    const projects = await Project.find({ members: userId }).populate('members', '-password');
+    if (projectIds.length === 0) { return res.json([]); }
 
-    res.json(projects);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al obtener proyectos' });
+    const projectsPromises = projectIds.map(id => ProjectRepository.getProjectDetailsById(id));
+    let projectsDetails = (await Promise.all(projectsPromises)).filter(p => p !== null) as Project[];
+    
+    // Usamos el transformador en cada proyecto de la lista
+    const publicProjects = projectsDetails.map(p => toPublicProject(p));
+    res.json(publicProjects);
+
+  } catch (error) { 
+    console.error('ERROR DETALLADO en GET /:', error);
+    res.status(500).json({ message: 'Error al obtener proyectos' }); 
   }
 });
 
-// Obtener proyecto por ID (solo miembros o admin)
-router.get('/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  try {
-    const project = await Project.findById(req.params.id).populate('members', '-password');
-    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
-
-    const userId = req.user?.userId;
-    const isMember = project.members.some(m => m._id.toString() === userId);
-    if (!isMember && req.user?.role !== 'admin') {
-      return res.status(403).json({ message: 'Acceso denegado' });
-    }
-
-    res.json(project);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al obtener proyecto' });
-  }
-});
-
-// Obtener miembros de un proyecto por ID (solo miembros o admin)
-router.get('/:id/members', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  try {
-    const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
-
-    const userId = req.user?.userId;
-    const isMember = project.members.some(m => m.toString() === userId);
-    if (!isMember && req.user?.role !== 'admin') {
-      return res.status(403).json({ message: 'Acceso denegado' });
-    }
-
-    const members = await User.find({ _id: { $in: project.members } }).select('-password');
-    res.json(members);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al obtener miembros' });
-  }
-});
-
-// Crear proyecto (cualquier usuario autenticado)
+// Crear proyecto
 router.post('/', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user?.userId;
-    if (!userId) return res.status(401).json({ message: 'No autorizado' });
-
-    const { name, description } = req.body;
-
-    const newProject = new Project({
-      name,
-      description,
-      createdBy: userId,
-      members: [userId], // El creador es miembro por defecto
+    const userId = req.user!.userId;
+    const { name, description, members = [], status, priority, dueDate } = req.body;
+    const newProject = await ProjectRepository.createProject({
+      name, description, createdBy: userId, members: [...new Set([userId, ...members])],
+      status, priority, dueDate
     });
-
-    await newProject.save();
-    res.status(201).json(newProject);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al crear proyecto' });
+    res.status(201).json(toPublicProject(newProject));
+  } catch (error) { 
+    console.error('ERROR DETALLADO en POST /:', error);
+    res.status(500).json({ message: 'Error al crear proyecto' }); 
   }
 });
 
-// Actualizar proyecto (solo admin o creador)
+// Obtener proyecto por ID
+router.get('/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
+    try {
+        const project = await ProjectRepository.getProjectDetailsById(req.params.id);
+        if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
+
+        const isMember = project.members.includes(req.user!.userId);
+        if (!isMember && req.user?.role !== 'admin') {
+            return res.status(403).json({ message: 'Acceso denegado' });
+        }
+
+        const membersData = await UserRepository.getUsersByIds(project.members);
+        membersData.forEach(m => delete (m as any).password);
+        
+        res.json(toPublicProject(project, membersData));
+    } catch (error) { 
+      console.error('ERROR DETALLADO en GET /:id :', error);
+      res.status(500).json({ message: 'Error al obtener proyecto' }); 
+    }
+});
+
+// Actualizar proyecto
 router.put('/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  try {
-    const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
+    try {
+        let project = await ProjectRepository.getProjectDetailsById(req.params.id);
+        if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
 
-    const userId = req.user?.userId;
-    if (req.user?.role !== 'admin' && project.createdBy.toString() !== userId) {
-      return res.status(403).json({ message: 'Acceso denegado' });
+        if (req.user?.role !== 'admin' && project.createdBy !== req.user!.userId) {
+            return res.status(403).json({ message: 'Acceso denegado' });
+        }
+
+        await ProjectRepository.updateProjectDetails(req.params.id, req.body);
+        const updatedProject = await ProjectRepository.getProjectDetailsById(req.params.id);
+        res.json(toPublicProject(updatedProject!));
+
+    } catch (error) { 
+      console.error('ERROR DETALLADO en PUT /:id :', error);
+      res.status(500).json({ message: 'Error al actualizar proyecto' }); 
     }
-
-    // Solo permitir actualizar ciertos campos
-    const allowedFields = ['name', 'description', 'status', 'priority', 'dueDate'];
-    const updateData: any = {};
-
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        updateData[field] = req.body[field];
-      }
-    }
-
-    const updatedProject = await Project.findByIdAndUpdate(req.params.id, updateData, { new: true }).populate('members', '-password');
-
-    res.json(updatedProject);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al actualizar proyecto' });
-  }
 });
 
-// Eliminar proyecto (solo admin o creador)
+// Eliminar proyecto (dejamos la lógica como estaba)
 router.delete('/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  try {
-    const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
-
-    const userId = req.user?.userId;
-    if (req.user?.role !== 'admin' && project.createdBy.toString() !== userId) {
-      return res.status(403).json({ message: 'Acceso denegado' });
+    try {
+        const project = await ProjectRepository.getProjectDetailsById(req.params.id);
+        if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
+        if (req.user?.role !== 'admin' && project.createdBy !== req.user!.userId) {
+            return res.status(403).json({ message: 'Acceso denegado' });
+        }
+        await ProjectRepository.deleteProjectById(req.params.id);
+        res.json({ message: 'Proyecto eliminado' });
+    } catch (error) { 
+        console.error('ERROR DETALLADO en DELETE /:id :', error);
+        res.status(500).json({ message: 'Error al eliminar proyecto' }); 
     }
-
-    await Project.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Proyecto eliminado' });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al eliminar proyecto' });
-  }
-});
-
-// Agregar miembro (solo admin o creador)
-router.post('/:id/members', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  try {
-    const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
-
-    const userId = req.user?.userId;
-    if (req.user?.role !== 'admin' && project.createdBy.toString() !== userId) {
-      return res.status(403).json({ message: 'Acceso denegado' });
-    }
-
-    const { memberId } = req.body;
-    if (!memberId) return res.status(400).json({ message: 'Debe enviar memberId' });
-
-    const userToAdd = await User.findById(memberId);
-    if (!userToAdd) return res.status(404).json({ message: 'Usuario no encontrado' });
-
-    if (project.members.some(m => m.toString() === memberId)) {
-      return res.status(400).json({ message: 'Usuario ya es miembro' });
-    }
-
-    project.members.push(memberId);
-    await project.save();
-
-    const populatedProject = await project.populate('members', '-password');
-
-    res.json(populatedProject);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al agregar miembro' });
-  }
-});
-
-// Eliminar miembro (solo admin o creador)
-router.delete('/:id/members/:memberId', authenticateJWT, async (req: AuthRequest, res: Response) => {
-  try {
-    const project = await Project.findById(req.params.id);
-    if (!project) return res.status(404).json({ message: 'Proyecto no encontrado' });
-
-    const userId = req.user?.userId;
-    if (req.user?.role !== 'admin' && project.createdBy.toString() !== userId) {
-      return res.status(403).json({ message: 'Acceso denegado' });
-    }
-
-    const memberId = req.params.memberId;
-
-    if (memberId === project.createdBy.toString()) {
-      return res.status(400).json({ message: 'No se puede eliminar al creador del proyecto' });
-    }
-
-    if (!project.members.some(m => m.toString() === memberId)) {
-      return res.status(400).json({ message: 'Usuario no es miembro' });
-    }
-
-    project.members = project.members.filter(m => m.toString() !== memberId);
-    await project.save();
-
-    const populatedProject = await project.populate('members', '-password');
-
-    res.json(populatedProject);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Error al eliminar miembro' });
-  }
 });
 
 export default router;

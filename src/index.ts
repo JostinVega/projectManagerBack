@@ -8,9 +8,7 @@ import dotenv from 'dotenv';
 // Rutas migradas a DynamoDB
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
-
-// Rutas que aún dependen de Mongoose (se migrarán después)
-// import projectRoutes from './routes/projects';
+import projectRoutes from './routes/projects';
 // import taskRoutes from './routes/tasks';
 // import notificationRoutes from './routes/notifications';
 // import dashboardRoutes from './routes/dashboard';
@@ -23,18 +21,10 @@ const PORT = process.env.PORT || 4000;
 app.use(cors());
 app.use(express.json());
 
-// -------------------------------------------------------------------
-// ELIMINADO: Bloque de conexión a MongoDB. Ya no es necesario.
-// Nuestro cliente de DynamoDB se inicializa bajo demanda.
-// -------------------------------------------------------------------
-// mongoose.connect(process.env.MONGO_URI || '')
-//   .then(() => console.log('MongoDB conectado'))
-//   .catch(err => console.error('Error MongoDB:', err));
-
-
 // --- Rutas funcionales con DynamoDB ---
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/projects', projectRoutes);
 
 
 // --- Rutas comentadas temporalmente para evitar errores ---
