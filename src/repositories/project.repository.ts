@@ -5,7 +5,8 @@ import {
   QueryCommand, 
   UpdateCommand, 
   PutCommand, 
-  DeleteCommand 
+  DeleteCommand,
+  BatchGetCommand
 } from '@aws-sdk/lib-dynamodb';
 import { ddbDocClient } from '../config/dynamodb';
 import { Project } from '../models/project.interface';
@@ -147,4 +148,50 @@ export const deleteProjectById = async (projectId: string) => {
   if (!Items || Items.length === 0) return;
   const deleteRequests = Items.map(item => ({ Delete: { TableName: PROJECTS_TABLE, Key: { PK: item.PK, SK: item.SK } } }));
   await ddbDocClient.send(new TransactWriteCommand({ TransactItems: deleteRequests }));
+};
+
+/**
+ * Busca los detalles de múltiples proyectos por sus IDs de forma eficiente.
+ * @param projectIds - Un array de IDs de proyecto a buscar.
+ * @returns Un array de objetos de proyecto encontrados.
+ */
+export const getProjectsByIds = async (projectIds: string[]): Promise<Project[]> => {
+  if (!projectIds || projectIds.length === 0) {
+    return [];
+  }
+  const uniqueProjectIds = [...new Set(projectIds)];
+
+  // Usamos BatchGetCommand para traer múltiples items de forma optimizada
+  const params = {
+    RequestItems: {
+      [PROJECTS_TABLE]: {
+        Keys: uniqueProjectIds.map(id => ({
+          PK: `PROJ#${id}`,
+          SK: 'METADATA'
+        })),
+      },
+    },
+  };
+
+  try {
+    const { Responses } = await ddbDocClient.send(new BatchGetCommand(params));
+    const projects = Responses?.[PROJECTS_TABLE] || [];
+
+    // Mapeamos la respuesta al formato de nuestra interfaz Project
+    return projects.map(p => ({
+        projectId: p.PK.split('#')[1],
+        name: p.name,
+        description: p.description,
+        createdBy: p.createdBy,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+        members: [], // Nota: esta consulta no trae los miembros, solo los metadatos.
+        status: p.status,
+        priority: p.priority,
+        dueDate: p.dueDate,
+    }));
+  } catch (error) {
+    console.error('Error al buscar proyectos por IDs:', error);
+    throw new Error('Error al obtener proyectos');
+  }
 };

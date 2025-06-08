@@ -125,4 +125,32 @@ router.delete('/:id', authenticateJWT, async (req: AuthRequest, res: Response) =
     }
 });
 
+// Obtener los miembros de un proyecto específico
+router.get('/:id/members', authenticateJWT, async (req: AuthRequest, res: Response) => {
+    try {
+        // 1. Buscamos el proyecto para obtener su lista de IDs de miembros
+        const project = await ProjectRepository.getProjectDetailsById(req.params.id);
+        if (!project) {
+            return res.status(404).json({ message: 'Proyecto no encontrado' });
+        }
+
+        // 2. Autorización: solo los miembros actuales pueden ver la lista de miembros
+        if (!project.members.includes(req.user!.userId) && req.user?.role !== 'admin') {
+            return res.status(403).json({ message: 'Acceso denegado' });
+        }
+
+        // 3. Usamos la función que ya creamos en el repositorio de usuarios para buscar todos los miembros a la vez
+        const membersData = await UserRepository.getUsersByIds(project.members);
+
+        // 4. Ocultamos las contraseñas antes de enviar la respuesta
+        membersData.forEach(m => delete (m as any).password);
+
+        res.json(membersData);
+
+    } catch (error) {
+        console.error('ERROR DETALLADO en GET /:id/members :', error);
+        res.status(500).json({ message: 'Error al obtener miembros del proyecto' });
+    }
+});
+
 export default router;

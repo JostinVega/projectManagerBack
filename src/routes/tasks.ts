@@ -1,12 +1,35 @@
-// routes/tasks.ts MODIFICADO PARA DYNAMODB
+// routes/tasks.ts (VERSIÓN FINAL CON MAPEADO COMPLETO PARA FRONTEND)
 
 import { Router, Response } from 'express';
 import * as TaskRepository from '../repositories/task.repository';
 import * as ProjectRepository from '../repositories/project.repository';
 import * as UserRepository from '../repositories/user.repository';
 import { authenticateJWT, AuthRequest } from '../middleware/auth';
+import { Task } from '../models/task.interface'; // Importamos nuestras interfaces internas
 
 const router = Router();
+
+// --- Función de Ayuda para transformar Tareas al formato público ---
+const toPublicTask = (task: Task, projectDetails?: any) => {
+    // Copiamos todos los campos de la tarea
+    const publicTask: any = { ...task };
+
+    // Renombramos/añadimos los campos de ID para ser compatibles con el frontend
+    publicTask._id = task.taskId;
+    publicTask.id = task.taskId;
+    
+    // Si nos pasan detalles del proyecto, "populamos" el campo 'project'
+    if (projectDetails) {
+        publicTask.project = {
+            _id: projectDetails.projectId,
+            id: projectDetails.projectId,
+            name: projectDetails.name
+        };
+    }
+    // Si no, 'task.project' ya contiene el string del ID, lo cual está bien.
+
+    return publicTask;
+};
 
 // Crear una tarea
 router.post('/', authenticateJWT, async (req: AuthRequest, res: Response) => {
@@ -25,7 +48,8 @@ router.post('/', authenticateJWT, async (req: AuthRequest, res: Response) => {
       title, description, project: projectId, assignedTo, dueDate, status
     });
     
-    res.status(201).json(newTask);
+    // Transformamos la respuesta
+    res.status(201).json(toPublicTask(newTask));
   } catch (error) { res.status(500).json({ message: 'Error al crear tarea' }); }
 });
 
@@ -38,9 +62,19 @@ router.get('/', authenticateJWT, async (req: AuthRequest, res: Response) => {
 
         const tasksPromises = projectLinks.map(link => TaskRepository.getTasksByProjectId(link.projectId));
         const tasksByProject = await Promise.all(tasksPromises);
-        const allTasks = tasksByProject.flat(); // Aplanamos el array de arrays de tareas
+        const allTasks = tasksByProject.flat();
 
-        res.json(allTasks);
+        const projectIdsFromTasks = [...new Set(allTasks.map(t => t.project))];
+        const projectsData = await ProjectRepository.getProjectsByIds(projectIdsFromTasks);
+        const projectsMap = new Map(projectsData.map(p => [p.projectId, p]));
+
+        // Mapeamos la respuesta final, "poblando" los datos del proyecto
+        const populatedTasks = allTasks.map(task => {
+            const projectInfo = projectsMap.get(task.project);
+            return toPublicTask(task, projectInfo);
+        });
+
+        res.json(populatedTasks);
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Error al obtener tareas' });
@@ -58,7 +92,8 @@ router.get('/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
             return res.status(403).json({ message: 'Acceso denegado' });
         }
         
-        res.json(task);
+        // Transformamos la tarea antes de enviarla
+        res.json(toPublicTask(task, project));
     } catch (error) {
         res.status(500).json({ message: 'Error al obtener tarea' });
     }
@@ -75,8 +110,11 @@ router.put('/:id', authenticateJWT, async (req: AuthRequest, res: Response) => {
             return res.status(403).json({ message: 'Acceso denegado' });
         }
 
-        const updatedTask = await TaskRepository.updateTask(task.project, task.taskId, req.body);
-        res.json(updatedTask);
+        const updatedTaskData = await TaskRepository.updateTask(task.project, task.taskId, req.body);
+        // La respuesta del update ya viene con los atributos, la transformamos también
+        const publicUpdatedTask = { ...updatedTaskData, _id: task.taskId, id: task.taskId };
+        res.json(publicUpdatedTask);
+
     } catch (error) {
         res.status(500).json({ message: 'Error al actualizar tarea' });
     }
