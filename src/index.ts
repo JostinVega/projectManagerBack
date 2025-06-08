@@ -9,7 +9,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
 import projectRoutes from './routes/projects';
-// import taskRoutes from './routes/tasks';
+import taskRoutes from './routes/tasks';
 // import notificationRoutes from './routes/notifications';
 // import dashboardRoutes from './routes/dashboard';
 
@@ -25,7 +25,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/projects', projectRoutes);
-
+app.use('/api/tasks', taskRoutes);
 
 // --- Rutas comentadas temporalmente para evitar errores ---
 // Estas rutas seguirán fallando hasta que migremos sus modelos y repositorios.
