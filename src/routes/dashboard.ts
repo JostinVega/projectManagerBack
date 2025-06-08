@@ -1,48 +1,59 @@
-import { Router, Request, Response } from 'express';
-import Project from '../models/Project';
-import Task from '../models/Task';
+// routes/dashboard.ts (VERSIÓN FINAL PARA DYNAMODB)
+
+import { Router, Response } from 'express';
 import { authenticateJWT, AuthRequest } from '../middleware/auth';
+import * as ProjectRepository from '../repositories/project.repository';
+import * as TaskRepository from '../repositories/task.repository';
 
 const router = Router();
 
 router.get('/stats', authenticateJWT, async (req: AuthRequest, res: Response) => {
   try {
-    const userId = req.user?.userId;
-    if (!userId) return res.status(401).json({ message: 'No autorizado' });
+    const userId = req.user!.userId;
 
-    // Obtener proyectos donde el usuario es miembro
-    const projects = await Project.find({ members: userId }).select('_id');
+    // 1. Obtenemos todos los proyectos donde el usuario es miembro
+    const projectLinks = await ProjectRepository.getProjectsByUserId(userId);
+    const totalProjects = projectLinks.length;
 
-    const projectIds = projects.map(p => p._id);
+    // Si el usuario no tiene proyectos, no tiene sentido seguir
+    if (totalProjects === 0) {
+      return res.json({
+        totalProjects: 0,
+        totalTasks: 0,
+        tasksByStatus: { pending: 0, in_progress: 0, completed: 0 }
+      });
+    }
 
-    // Conteo de proyectos
-    const totalProjects = projects.length;
+    const projectIds = projectLinks.map(p => p.projectId);
 
-    // Conteo de tareas totales
-    const totalTasks = await Task.countDocuments({ project: { $in: projectIds } });
+    // 2. Obtenemos TODAS las tareas de TODOS esos proyectos en paralelo
+    const tasksPromises = projectIds.map(id => TaskRepository.getTasksByProjectId(id));
+    const tasksByProject = await Promise.all(tasksPromises);
+    const allTasks = tasksByProject.flat(); // Aplanamos el array de arrays en uno solo
 
-    // Conteo de tareas por estado
-    const tasksByStatus = await Task.aggregate([
-      { $match: { project: { $in: projectIds } } },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
+    // 3. Ahora que tenemos los datos, calculamos las estadísticas en nuestro código
+    const totalTasks = allTasks.length;
 
-    // Formatear estados
-    const taskStatusCount = {
+    // Usamos .reduce() para contar las tareas por estado de forma eficiente
+    const tasksByStatus = allTasks.reduce((acc, task) => {
+      acc[task.status] = (acc[task.status] || 0) + 1;
+      return acc;
+    }, {
       pending: 0,
       in_progress: 0,
       completed: 0
-    };
-    tasksByStatus.forEach(item => {
-      taskStatusCount[item._id] = item.count;
-    });
+    } as { [key: string]: number });
 
+
+    // 4. Enviamos el objeto final con las estadísticas
     res.json({
       totalProjects,
       totalTasks,
-      tasksByStatus: taskStatusCount
+      tasksByStatus
     });
+
   } catch (error) {
+    console.error("Error obteniendo estadísticas del dashboard:", error);
     res.status(500).json({ message: 'Error al obtener estadísticas' });
   }
 });

@@ -1,7 +1,11 @@
+// routes/auth.ts MODIFICADO PARA DYNAMODB
+
 import { Router, Request, Response } from 'express';
-import User from '../models/User';
+// import User from '../models/User'; // YA NO USAMOS MONGOOSE
+import * as UserRepository from '../repositories/user.repository'; // USAMOS NUESTRO REPOSITORIO
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { User } from '../models/user.interface'; // Importamos la interfaz para tipado
 
 const router = Router();
 
@@ -13,39 +17,42 @@ router.post('/register', async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'Faltan campos obligatorios' });
     }
 
-    const existingUserEmail = await User.findOne({ email });
+    // Verificamos si ya existe el email o el username usando nuestro repositorio
+    const existingUserEmail = await UserRepository.getUserByEmail(email);
     if (existingUserEmail) {
       return res.status(400).json({ message: 'Correo electrónico ya registrado' });
     }
 
-    const existingUserName = await User.findOne({ username });
+    const existingUserName = await UserRepository.getUserByUsername(username);
     if (existingUserName) {
       return res.status(400).json({ message: 'Nombre de usuario ya registrado' });
     }
 
+    // La lógica de hashear la contraseña no cambia
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({
+    
+    // Creamos el usuario llamando a la función del repositorio
+    const newUser = await UserRepository.createUser({
       firstName,
       lastName,
       username,
       email,
       password: hashedPassword,
-      role: 'user'
+      role: 'user' // Por defecto, o puedes tomarlo del req.body si es necesario
     });
-    await newUser.save();
 
-    // Generar token JWT
+    // Generar token JWT. MUY IMPORTANTE: Usamos newUser.userId (el de DynamoDB)
     const token = jwt.sign(
-      { userId: newUser._id, role: newUser.role },
+      { userId: newUser.userId, role: newUser.role }, // Usamos el nuevo userId
       process.env.JWT_SECRET || 'secret',
       { expiresIn: '1d' }
     );
 
-    // Responder con token y usuario (incluyendo role)
+    // Responder con token y usuario
     res.status(201).json({
       token,
       user: {
-        id: newUser._id,
+        id: newUser.userId, // Enviamos el nuevo userId
         firstName: newUser.firstName,
         lastName: newUser.lastName,
         username: newUser.username,
@@ -68,28 +75,30 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(400).json({ message: 'Faltan campos obligatorios' });
     }
 
-    const user = await User.findOne({ email });
+    // Buscamos al usuario por email con nuestro repositorio
+    const user = await UserRepository.getUserByEmail(email);
     if (!user) {
-      return res.status(400).json({ message: 'Usuario no encontrado' });
+      return res.status(400).json({ message: 'Credenciales incorrectas' }); // Mensaje genérico por seguridad
     }
 
+    // La lógica de comparar contraseñas no cambia
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(400).json({ message: 'Contraseña incorrecta' });
+      return res.status(400).json({ message: 'Credenciales incorrectas' }); // Mensaje genérico por seguridad
     }
 
-    // Generar token JWT
+    // Generar token JWT. MUY IMPORTANTE: Usamos user.userId
     const token = jwt.sign(
-      { userId: user._id, role: user.role },
+      { userId: user.userId, role: user.role },
       process.env.JWT_SECRET || 'secret',
       { expiresIn: '1d' }
     );
 
-    // Responder con token y usuario (incluyendo role)
+    // Responder con token y usuario
     res.json({
       token,
       user: {
-        id: user._id,
+        id: user.userId,
         firstName: user.firstName,
         lastName: user.lastName,
         username: user.username,
